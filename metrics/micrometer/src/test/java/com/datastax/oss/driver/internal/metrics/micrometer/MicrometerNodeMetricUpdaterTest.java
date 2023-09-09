@@ -45,6 +45,8 @@ import com.tngtech.java.junit.dataprovider.UseDataProvider;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.distribution.HistogramSnapshot;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.prometheus.PrometheusConfig;
+import io.micrometer.prometheus.PrometheusMeterRegistry;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -153,7 +155,8 @@ public class MicrometerNodeMetricUpdaterTest {
       DriverOption highest,
       DriverOption digits,
       DriverOption sla,
-      DriverOption percentiles) {
+      DriverOption percentiles,
+      DriverOption generateHistogram) {
     // given
     Node node = mock(Node.class);
     InternalDriverContext context = mock(InternalDriverContext.class);
@@ -209,7 +212,8 @@ public class MicrometerNodeMetricUpdaterTest {
       DriverOption highest,
       DriverOption digits,
       DriverOption sla,
-      DriverOption percentiles) {
+      DriverOption percentiles,
+      DriverOption generateHistogram) {
     // given
     Node node = mock(Node.class);
     InternalDriverContext context = mock(InternalDriverContext.class);
@@ -252,6 +256,116 @@ public class MicrometerNodeMetricUpdaterTest {
     assertThat(snapshot.percentileValues()).hasSize(0);
   }
 
+  @Test
+  @UseDataProvider(value = "timerMetrics")
+  public void should_generate_histogram_prometheus_timer(
+      NodeMetric metric,
+      DriverOption lowest,
+      DriverOption highest,
+      DriverOption digits,
+      DriverOption sla,
+      DriverOption percentiles,
+      DriverOption generateHistogram) {
+    // given
+    Node node = mock(Node.class);
+    InternalDriverContext context = mock(InternalDriverContext.class);
+    DriverExecutionProfile profile = mock(DriverExecutionProfile.class);
+    DriverConfig config = mock(DriverConfig.class);
+    MetricIdGenerator generator = mock(MetricIdGenerator.class);
+    Set<NodeMetric> enabledMetrics = Collections.singleton(metric);
+
+    // when
+    when(context.getSessionName()).thenReturn("prefix");
+    when(context.getConfig()).thenReturn(config);
+    when(config.getDefaultProfile()).thenReturn(profile);
+    when(context.getMetricIdGenerator()).thenReturn(generator);
+    when(profile.getDuration(DefaultDriverOption.METRICS_NODE_EXPIRE_AFTER))
+        .thenReturn(Duration.ofHours(1));
+    when(profile.getDuration(lowest)).thenReturn(Duration.ofMillis(10));
+    when(profile.getDuration(highest)).thenReturn(Duration.ofSeconds(1));
+    when(profile.getInt(digits)).thenReturn(5);
+    when(profile.isDefined(sla)).thenReturn(false);
+    when(profile.getDurationList(sla))
+        .thenReturn(Arrays.asList(Duration.ofMillis(100), Duration.ofMillis(500)));
+    when(profile.getBoolean(generateHistogram)).thenReturn(true);
+    when(profile.isDefined(percentiles)).thenReturn(false);
+    when(generator.nodeMetricId(node, metric)).thenReturn(METRIC_ID);
+
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    MicrometerNodeMetricUpdater updater =
+        new MicrometerNodeMetricUpdater(node, context, enabledMetrics, registry);
+
+    for (int i = 0; i < 10; i++) {
+      updater.updateTimer(metric, null, 10, TimeUnit.MILLISECONDS);
+    }
+
+    // then
+    Timer timer = registry.find(METRIC_ID.getName()).timer();
+    assertThat(timer).isNotNull();
+    assertThat(timer.count()).isEqualTo(10);
+    HistogramSnapshot snapshot = timer.takeSnapshot();
+    assertThat(snapshot.histogramCounts()).hasSizeGreaterThan(10);
+    assertThat(snapshot.percentileValues()).hasSize(0);
+  }
+
+  @Test
+  @UseDataProvider(value = "timerMetrics")
+  public void should_not_generate_histogram_prometheus_timer(
+      NodeMetric metric,
+      DriverOption lowest,
+      DriverOption highest,
+      DriverOption digits,
+      DriverOption sla,
+      DriverOption percentiles,
+      DriverOption generateHistogram) {
+    // given
+    Node node = mock(Node.class);
+    InternalDriverContext context = mock(InternalDriverContext.class);
+    DriverExecutionProfile profile = mock(DriverExecutionProfile.class);
+    DriverConfig config = mock(DriverConfig.class);
+    MetricIdGenerator generator = mock(MetricIdGenerator.class);
+    Set<NodeMetric> enabledMetrics = Collections.singleton(metric);
+
+    // when
+    when(context.getSessionName()).thenReturn("prefix");
+    when(context.getConfig()).thenReturn(config);
+    when(config.getDefaultProfile()).thenReturn(profile);
+    when(context.getMetricIdGenerator()).thenReturn(generator);
+    when(profile.getDuration(DefaultDriverOption.METRICS_NODE_EXPIRE_AFTER))
+        .thenReturn(Duration.ofHours(1));
+    when(profile.getDuration(lowest)).thenReturn(Duration.ofMillis(10));
+    when(profile.getDuration(highest)).thenReturn(Duration.ofSeconds(1));
+    when(profile.getInt(digits)).thenReturn(5);
+    when(profile.isDefined(sla)).thenReturn(false);
+    when(profile.getDurationList(sla))
+        .thenReturn(Arrays.asList(Duration.ofMillis(100), Duration.ofMillis(500)));
+    when(profile.getBoolean(generateHistogram)).thenReturn(false);
+    when(profile.isDefined(percentiles)).thenReturn(true);
+    when(profile.getDoubleList(percentiles)).thenReturn(Arrays.asList(0.75, 0.95, 0.99));
+    when(generator.nodeMetricId(node, metric)).thenReturn(METRIC_ID);
+
+    PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+    MicrometerNodeMetricUpdater updater =
+        new MicrometerNodeMetricUpdater(node, context, enabledMetrics, registry);
+
+    for (int i = 0; i < 10; i++) {
+      updater.updateTimer(metric, null, 10, TimeUnit.MILLISECONDS);
+    }
+
+    // then
+    Timer timer = registry.find(METRIC_ID.getName()).timer();
+    assertThat(timer).isNotNull();
+    assertThat(timer.count()).isEqualTo(10);
+    HistogramSnapshot snapshot = timer.takeSnapshot();
+    assertThat(snapshot.histogramCounts()).hasSize(0);
+    assertThat(snapshot.percentileValues()).hasSize(3);
+    assertThat(snapshot.percentileValues())
+        .satisfiesExactlyInAnyOrder(
+            valuePercentile -> assertThat(valuePercentile.percentile()).isEqualTo(0.75),
+            valuePercentile -> assertThat(valuePercentile.percentile()).isEqualTo(0.95),
+            valuePercentile -> assertThat(valuePercentile.percentile()).isEqualTo(0.99));
+  }
+
   @DataProvider
   public static Object[][] timerMetrics() {
     return new Object[][] {
@@ -262,6 +376,7 @@ public class MicrometerNodeMetricUpdaterTest {
         DefaultDriverOption.METRICS_NODE_CQL_MESSAGES_DIGITS,
         DefaultDriverOption.METRICS_NODE_CQL_MESSAGES_SLO,
         DefaultDriverOption.METRICS_NODE_CQL_MESSAGES_PUBLISH_PERCENTILES,
+        DefaultDriverOption.METRICS_GENERATE_AGGREGABLE_HISTOGRAMS
       },
       {
         DseNodeMetric.GRAPH_MESSAGES,
@@ -270,6 +385,7 @@ public class MicrometerNodeMetricUpdaterTest {
         DseDriverOption.METRICS_NODE_GRAPH_MESSAGES_DIGITS,
         DseDriverOption.METRICS_NODE_GRAPH_MESSAGES_SLO,
         DseDriverOption.METRICS_NODE_GRAPH_MESSAGES_PUBLISH_PERCENTILES,
+        DefaultDriverOption.METRICS_GENERATE_AGGREGABLE_HISTOGRAMS
       },
     };
   }

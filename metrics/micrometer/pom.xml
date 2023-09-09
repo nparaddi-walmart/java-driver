@@ -27,6 +27,9 @@
   <artifactId>java-driver-metrics-micrometer</artifactId>
   <packaging>bundle</packaging>
   <name>DataStax Java driver for Apache Cassandra(R) - Metrics - Micrometer</name>
+  <properties>
+    <prometheus-version>1.10.5</prometheus-version>
+  </properties>
   <dependencyManagement>
     <dependencies>
       <dependency>
@@ -56,6 +59,12 @@
           <artifactId>HdrHistogram</artifactId>
         </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <version>${prometheus-version}</version>
+      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>ch.qos.logback</groupId>
